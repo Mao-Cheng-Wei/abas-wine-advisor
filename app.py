@@ -9,7 +9,11 @@ from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 
-OPENROUTER_MODEL = "qwen/qwen3-8b:free"
+OPENROUTER_MODELS = [
+    ("thinkingmachines/inkling-small:free", "Inkling Small (free)"),
+    ("minimax/minimax-m2.7:free", "MiniMax M2.7 (free)"),
+    ("liquid/lfm-2.5-2.6b:free", "LFM2.5-2.6B (free)"),
+]
 
 st.set_page_config(
     page_title="安貝斯風味人格選酒顧問",
@@ -188,6 +192,23 @@ def get_openrouter_client():
     )
 
 
+def call_openrouter_with_fallback(client, messages):
+    errors = []
+    for model_slug, model_label in OPENROUTER_MODELS:
+        try:
+            response = client.chat.completions.create(
+                model=model_slug,
+                messages=messages,
+                temperature=0.1,
+                max_tokens=650,
+                timeout=120,
+            )
+            return response, model_label
+        except Exception as e:
+            errors.append(f"{model_label}: {e}")
+    raise RuntimeError("所有免費雲端模型目前皆無法使用。" + " | ".join(errors))
+
+
 if "step" not in st.session_state:
     st.session_state.step = 0
 if "scores" not in st.session_state:
@@ -304,8 +325,7 @@ else:
             for i, p in enumerate(top3, 1):
                 rec += f"\n第{i}名｜{p['name']}｜分數{p['score']}｜酒精感{p['alcohol_level']}｜命中標籤：{'、'.join(p['matched_tags'])}"
 
-            prompt = f"""/no_think
-你是「安貝斯風味人格選酒顧問」。推薦排名已由 Python 規則引擎決定，不得修改。
+            prompt = f"""你是「安貝斯風味人格選酒顧問」。推薦排名已由 Python 規則引擎決定，不得修改。
 
 【RAG 知識】
 {rag_context}
@@ -342,17 +362,13 @@ else:
 """
 
             client = get_openrouter_client()
+            messages = [
+                {"role": "system", "content": "你是安貝斯品牌的繁體中文選酒顧問。只根據提供資料回答，不可臆測。"},
+                {"role": "user", "content": prompt},
+            ]
+
             with st.spinner("安貝斯 AI 顧問正在雲端分析..."):
-                resp = client.chat.completions.create(
-                    model=OPENROUTER_MODEL,
-                    messages=[
-                        {"role": "system", "content": "你是安貝斯品牌的繁體中文選酒顧問。只根據提供資料回答，不可臆測。"},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.1,
-                    max_tokens=650,
-                    timeout=120,
-                )
+                resp, used_model = call_openrouter_with_fallback(client, messages)
 
             ai_text = resp.choices[0].message.content
             st.markdown(
@@ -361,6 +377,7 @@ else:
                 '<div class="ai-divider"></div>',
                 unsafe_allow_html=True,
             )
+            st.caption(f"本次雲端模型：{used_model}")
             st.markdown(ai_text)
 
         except Exception as e:
