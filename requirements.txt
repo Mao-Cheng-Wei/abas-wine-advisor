@@ -4,3 +4,4 @@ openai>=1.0
 llama-index-core>=0.13,<0.15
 llama-index-embeddings-fastembed>=0.3
 fastembed>=0.7
+tiktoken>=0.8
