@@ -6,6 +6,7 @@ import streamlit as st
 import tiktoken
 from openpyxl import load_workbook
 from openai import OpenAI
+from pydantic import BaseModel, Field
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
@@ -19,6 +20,17 @@ APP_URL = "https://abas-wine-advisor-2ju5inrreherxujphsnu7y.streamlit.app"
 CONTACT_PAGE = "https://dagc.com.tw/contact"
 DEFAULT_LINE_URL = "https://line.me/R/ti/p/@abas"
 PRODUCT_IMAGE_DIR = Path("images/products")
+
+
+class AdvisorRecommendation(BaseModel):
+    name: str = Field(description="推薦酒款名稱，必須完全沿用提供的產品名稱")
+    reason: str = Field(description="2到3句繁體中文推薦理由")
+
+
+class AdvisorResult(BaseModel):
+    personality: str = Field(description="80到120字、2到3句的繁體中文風味人格輪廓")
+    recommendations: list[AdvisorRecommendation] = Field(description="依照既定排名逐一提供推薦酒款與理由")
+
 
 st.set_page_config(
     page_title="安貝斯風味人格選酒顧問",
@@ -268,52 +280,37 @@ def get_gemini_client():
     )
 
 
-def call_gemini_with_fallback(client, messages):
+def call_gemini_structured_with_fallback(client, messages):
     errors = []
     for model_slug, model_label in GEMINI_MODELS:
         try:
-            response = client.chat.completions.create(
+            completion = client.beta.chat.completions.parse(
                 model=model_slug,
                 messages=messages,
                 temperature=0.1,
-                max_tokens=900,
+                max_tokens=1200,
                 timeout=120,
-                response_format={"type": "json_object"},
+                response_format=AdvisorResult,
             )
-            content = response.choices[0].message.content
-            if not content or not str(content).strip() or str(content).strip().lower() == "none":
-                raise RuntimeError("模型沒有回傳有效文字")
-            return response, model_label
+            parsed = completion.choices[0].message.parsed
+            if parsed is None:
+                raise RuntimeError("模型沒有回傳可解析的結構化結果")
+            return parsed, model_label
         except Exception as e:
             errors.append(f"{model_label}: {e}")
     raise RuntimeError("Gemini 雲端模型目前無法完成分析。" + " | ".join(errors))
 
 
-def parse_advisor_json(text):
-    raw = str(text).strip()
-    if raw.startswith("```json"):
-        raw = raw[7:]
-    if raw.startswith("```"):
-        raw = raw[3:]
-    if raw.endswith("```"):
-        raw = raw[:-3]
-    return json.loads(raw.strip())
-
-
 def validate_advisor_payload(payload, top3):
-    required = ["personality", "recommendations"]
-    if not all(k in payload for k in required):
+    if not payload.personality.strip():
         return False
-    recs = payload.get("recommendations")
-    if not isinstance(recs, list) or len(recs) != len(top3):
-        return False
-    if not str(payload.get("personality", "")).strip():
+    if len(payload.recommendations) != len(top3):
         return False
     for idx, product in enumerate(top3):
-        item = recs[idx]
-        if str(item.get("name", "")).strip() != str(product["name"]).strip():
+        item = payload.recommendations[idx]
+        if item.name.strip() != str(product["name"]).strip():
             return False
-        if not str(item.get("reason", "")).strip():
+        if not item.reason.strip():
             return False
     return True
 
@@ -328,14 +325,6 @@ def build_advisor_messages(rag_context, user_scores, top3, retry_note=""):
             "matched_tags": p["matched_tags"],
         })
 
-    schema_example = {
-        "personality": "80～120字的人格輪廓",
-        "recommendations": [
-            {"name": p["name"], "reason": "2～3句完整推薦理由"}
-            for p in top3
-        ],
-    }
-
     prompt = f"""你是「安貝斯風味人格選酒顧問」。推薦酒款與順序已由 Python 決定，你只負責解讀，不得更動。
 
 【安貝斯知識】
@@ -346,9 +335,6 @@ def build_advisor_messages(rag_context, user_scores, top3, retry_note=""):
 
 【固定推薦結果】
 {json.dumps(rec, ensure_ascii=False)}
-
-請輸出一個 JSON 物件，且只能輸出 JSON，不要加 Markdown、前言或解釋。格式必須完全符合：
-{json.dumps(schema_example, ensure_ascii=False)}
 
 內容要求：
 1. personality：80～120字、2～3句。像一位懂人也懂酒的品牌顧問，溫暖、自然、有畫面，但不能浮誇。
@@ -371,17 +357,16 @@ def generate_advisor_result(client, rag_context, user_scores, top3):
     last_error = None
     used_model = ""
     for attempt in range(2):
-        retry_note = "" if attempt == 0 else "\n上一次輸出不完整。這次務必補齊 personality 與每一款推薦酒，且名稱與順序完全一致。"
+        retry_note = "" if attempt == 0 else "\n上一次內容未通過驗證。這次務必補齊所有推薦酒款，名稱與順序完全一致。"
         messages = build_advisor_messages(rag_context, user_scores, top3, retry_note)
         try:
-            resp, used_model = call_gemini_with_fallback(client, messages)
-            payload = parse_advisor_json(resp.choices[0].message.content)
+            payload, used_model = call_gemini_structured_with_fallback(client, messages)
             if validate_advisor_payload(payload, top3):
                 return payload, used_model
-            last_error = RuntimeError("AI 回覆欄位不完整")
+            last_error = RuntimeError("AI 回覆欄位或酒款順序不完整")
         except Exception as e:
             last_error = e
-    raise RuntimeError(f"AI 解讀格式驗證失敗：{last_error}")
+    raise RuntimeError(f"AI 解讀結構驗證失敗：{last_error}")
 
 
 if "step" not in st.session_state:
@@ -509,12 +494,12 @@ else:
 
             with st.container(border=True):
                 st.markdown("### 你的風味人格輪廓")
-                st.write(advisor["personality"])
+                st.write(advisor.personality)
 
-                for idx, item in enumerate(advisor["recommendations"]):
+                for idx, item in enumerate(advisor.recommendations):
                     st.markdown(f"### {labels[idx]}")
-                    st.markdown(f"**{item['name']}**")
-                    st.write(item["reason"])
+                    st.markdown(f"**{item.name}**")
+                    st.write(item.reason)
 
             with st.expander("技術資訊"):
                 st.caption(f"本次雲端模型：{used_model}")
