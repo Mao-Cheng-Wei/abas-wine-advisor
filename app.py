@@ -1,5 +1,6 @@
 import os
 import base64
+import tiktoken
 import streamlit as st
 from openpyxl import load_workbook
 from openai import OpenAI
@@ -33,9 +34,7 @@ st.markdown(
     f"""
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:6px;">
       <img src="data:image/jpeg;base64,{logo_base64}" style="width:82px;height:auto;display:block;">
-      <div style="font-size:34px;font-weight:700;line-height:1.15;color:#2F3140;">
-        安貝斯風味人格選酒顧問
-      </div>
+      <div style="font-size:34px;font-weight:700;line-height:1.15;color:#2F3140;">安貝斯風味人格選酒顧問</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -99,34 +98,39 @@ questions = [
         "D":{"text":"喜歡強勁、集中、帶衝擊力","tags":["高酒感","原漿","強勁"]}}},
 ]
 
+
 def get_alcohol_level(alcohol_text):
     if alcohol_text is None:
         return "待確認"
-    text = str(alcohol_text).replace("%","").replace("vol","").strip()
+    text = str(alcohol_text).replace("%", "").replace("vol", "").strip()
     try:
         value = float(text)
-        if value < 20: return "低"
-        if value < 50: return "中高"
+        if value < 20:
+            return "低"
+        if value < 50:
+            return "中高"
         return "高"
     except Exception:
         return "待確認"
+
 
 def split_tags(tag_text):
     if tag_text is None:
         return []
     text = str(tag_text).strip()
-    if text in ["","待補","待確認","None"]:
+    if text in ["", "待補", "待確認", "None"]:
         return []
-    for mark in ["；",";",",","，"]:
-        text = text.replace(mark,"、")
+    for mark in ["；", ";", ",", "，"]:
+        text = text.replace(mark, "、")
     return [t.strip() for t in text.split("、") if t.strip()]
+
 
 @st.cache_data
 def load_products_from_excel():
     wb = load_workbook("data/安貝斯產品知識庫_維護主檔_補標籤.xlsx", data_only=True)
     ws = wb["知識庫產品主檔"]
     headers = [c.value for c in ws[1]]
-    hm = {h:i for i,h in enumerate(headers) if h}
+    hm = {h: i for i, h in enumerate(headers) if h}
     out = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row[hm["產品編號"]]:
@@ -142,22 +146,28 @@ def load_products_from_excel():
             "tags": split_tags(row[hm["風味標籤"]]),
             "alcohol_level": get_alcohol_level(alcohol),
             "status": status,
-            "recommendable": str(current).strip()=="是" and str(status).strip()=="販售中",
+            "recommendable": str(current).strip() == "是" and str(status).strip() == "販售中",
             "url": row[hm["來源網址"]],
             "price": row[hm["價格"]],
             "alcohol": alcohol,
         })
     return out
 
+
 products = load_products_from_excel()
+
 
 @st.cache_resource(show_spinner="第一次啟動：正在載入中文 Embedding 模型與建立 RAG 索引...")
 def build_rag_index():
     Settings.embed_model = FastEmbedEmbedding(model_name="BAAI/bge-small-zh-v1.5")
+    Settings.tokenizer = tiktoken.get_encoding("cl100k_base").encode
     docs = SimpleDirectoryReader(
-        input_dir="data", recursive=True, required_exts=[".md",".txt"]
+        input_dir="data",
+        recursive=True,
+        required_exts=[".md", ".txt"],
     ).load_data()
     return VectorStoreIndex.from_documents(docs)
+
 
 def get_openrouter_client():
     try:
@@ -175,33 +185,42 @@ def get_openrouter_client():
         },
     )
 
-if "step" not in st.session_state: st.session_state.step = 0
-if "scores" not in st.session_state: st.session_state.scores = {}
-if "finished" not in st.session_state: st.session_state.finished = False
+
+if "step" not in st.session_state:
+    st.session_state.step = 0
+if "scores" not in st.session_state:
+    st.session_state.scores = {}
+if "finished" not in st.session_state:
+    st.session_state.finished = False
+
 
 if not st.session_state.finished:
     step = st.session_state.step
     q = questions[step]
-    st.progress((step+1)/len(questions))
-    st.caption(f"第 {step+1} / {len(questions)} 題")
+    st.progress((step + 1) / len(questions))
+    st.caption(f"第 {step + 1} / {len(questions)} 題")
     st.subheader(f"{q['id']}｜{q['title']}")
     st.write(q["question"])
     answer = st.radio(
-        "請選擇：", list(q["options"].keys()),
+        "請選擇：",
+        list(q["options"].keys()),
         format_func=lambda x: f"{x}. {q['options'][x]['text']}",
-        key=f"q_{step}"
+        key=f"q_{step}",
     )
+
     if st.button("下一題", use_container_width=True):
         for tag in q["options"][answer]["tags"]:
-            st.session_state.scores[tag] = st.session_state.scores.get(tag,0)+3
-        if step+1 >= len(questions):
+            st.session_state.scores[tag] = st.session_state.scores.get(tag, 0) + 3
+        if step + 1 >= len(questions):
             st.session_state.finished = True
         else:
             st.session_state.step += 1
         st.rerun()
+
 else:
     st.success("測驗完成")
     user_scores = st.session_state.scores
+
     if "低酒精" in user_scores or "中低酒感" in user_scores:
         ual = "低"
     elif "中高酒感" in user_scores:
@@ -213,42 +232,55 @@ else:
 
     results = []
     for p in products:
-        if not p["recommendable"]: continue
-        if ual=="低" and p["alcohol_level"] in ["中高","高"]: continue
-        if ual=="中高" and p["alcohol_level"]=="高": continue
+        if not p["recommendable"]:
+            continue
+        if ual == "低" and p["alcohol_level"] in ["中高", "高"]:
+            continue
+        if ual == "中高" and p["alcohol_level"] == "高":
+            continue
+
         score = 0
         matched = []
         for tag in p["tags"]:
             if tag in user_scores:
                 score += 3
                 matched.append(tag)
-        if p["alcohol_level"] == ual: score += 4
-        if p["status"] == "販售中": score += 2
-        results.append({**p,"score":score,"matched_tags":matched})
+        if p["alcohol_level"] == ual:
+            score += 4
+        if p["status"] == "販售中":
+            score += 2
+        results.append({**p, "score": score, "matched_tags": matched})
 
-    results.sort(key=lambda x:x["score"], reverse=True)
+    results.sort(key=lambda x: x["score"], reverse=True)
     top3 = results[:3]
 
     st.markdown('<div style="font-size:30px;font-weight:700;margin-top:20px;">你的風味人格</div>', unsafe_allow_html=True)
-    top_tags = sorted(user_scores.items(), key=lambda x:x[1], reverse=True)[:8]
+    top_tags = sorted(user_scores.items(), key=lambda x: x[1], reverse=True)[:8]
     chips = "".join(
         f'<span style="display:inline-block;background:#F7F0E4;color:#7A5520;padding:7px 14px;border-radius:20px;margin:4px;font-size:16px;">{tag}</span>'
-        for tag,_ in top_tags
+        for tag, _ in top_tags
     )
     st.markdown(chips, unsafe_allow_html=True)
 
     st.markdown('<div style="font-size:30px;font-weight:700;margin-top:18px;margin-bottom:18px;">你的推薦酒款</div>', unsafe_allow_html=True)
-    labels = ["最像你的酒","另一種可能","想挑戰的酒"]
-    for i,p in enumerate(top3):
+    labels = ["最像你的酒", "另一種可能", "想挑戰的酒"]
+
+    for i, p in enumerate(top3):
         st.markdown(
-            f"""<div style="border:1px solid #E8E2D8;border-radius:16px;padding:22px;margin-bottom:12px;background:#FFFDF9;">
-            <div style="font-size:16px;color:#A9782A;font-weight:700;">{labels[i]}</div>
-            <div style="font-size:25px;font-weight:700;margin:8px 0 14px;">{p['name']}</div>
-            <div style="font-size:16px;line-height:1.8;">配對分數：{p['score']}<br>酒精感：{p['alcohol_level']}<br>
-            酒精度：{p['alcohol'] if p['alcohol'] else '待確認'}<br>
-            價格：{'NT$'+str(p['price']) if p['price'] else '待確認'}<br>
-            命中標籤：{'、'.join(p['matched_tags']) if p['matched_tags'] else '目前無直接命中'}</div></div>""",
-            unsafe_allow_html=True
+            f"""
+            <div style="border:1px solid #E8E2D8;border-radius:16px;padding:22px;margin-bottom:12px;background:#FFFDF9;">
+              <div style="font-size:16px;color:#A9782A;font-weight:700;">{labels[i]}</div>
+              <div style="font-size:25px;font-weight:700;margin:8px 0 14px;">{p['name']}</div>
+              <div style="font-size:16px;line-height:1.8;">
+                配對分數：{p['score']}<br>
+                酒精感：{p['alcohol_level']}<br>
+                酒精度：{p['alcohol'] if p['alcohol'] else '待確認'}<br>
+                價格：{'NT$' + str(p['price']) if p['price'] else '待確認'}<br>
+                命中標籤：{'、'.join(p['matched_tags']) if p['matched_tags'] else '目前無直接命中'}
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
         if p["url"]:
             st.link_button("查看官方產品", p["url"], use_container_width=True)
@@ -258,18 +290,27 @@ else:
         try:
             index = build_rag_index()
             retriever = index.as_retriever(similarity_top_k=4)
-            rq = f"使用者風味標籤：{user_scores}\n推薦酒款：{[p['name'] for p in top3]}\n請找相關安貝斯產品特色與推薦規則。"
+            rq = f"""
+使用者風味標籤：{user_scores}
+推薦酒款：{[p['name'] for p in top3]}
+請找相關安貝斯產品特色與推薦規則。
+"""
             nodes = retriever.retrieve(rq)
             rag_context = "\n\n".join(n.get_content() for n in nodes)
 
             rec = ""
-            for i,p in enumerate(top3,1):
+            for i, p in enumerate(top3, 1):
                 rec += f"\n第{i}名｜{p['name']}｜分數{p['score']}｜酒精感{p['alcohol_level']}｜命中標籤：{'、'.join(p['matched_tags'])}"
 
             prompt = f"""你是安貝斯風味人格選酒顧問。排名已由 Python 決定，不得修改。
-【RAG知識】{rag_context}
-【使用者標籤】{user_scores}
-【推薦結果】{rec}
+【RAG知識】
+{rag_context}
+
+【使用者標籤】
+{user_scores}
+
+【推薦結果】
+{rec}
 
 請以繁體中文輸出：
 【你的風味人格輪廓】80～120字，2～3句。
@@ -282,13 +323,20 @@ else:
             with st.spinner("安貝斯 AI 顧問正在雲端分析..."):
                 resp = client.chat.completions.create(
                     model="openrouter/free",
-                    messages=[{"role":"user","content":prompt}],
+                    messages=[{"role": "user", "content": prompt}],
                     temperature=0.2,
-                    timeout=120
+                    timeout=120,
                 )
+
             ai_text = resp.choices[0].message.content
-            st.markdown('<div class="ai-main-title">安貝斯 AI 顧問解讀</div><div class="ai-subtitle">根據你的風味人格與安貝斯 RAG 知識庫，整理出推薦說明</div><div class="ai-divider"></div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="ai-main-title">安貝斯 AI 顧問解讀</div>'
+                '<div class="ai-subtitle">根據你的風味人格與安貝斯 RAG 知識庫，整理出推薦說明</div>'
+                '<div class="ai-divider"></div>',
+                unsafe_allow_html=True,
+            )
             st.markdown(ai_text)
+
         except Exception as e:
             st.warning("目前無法完成雲端 AI / RAG 分析。")
             st.caption(f"錯誤資訊：{e}")
