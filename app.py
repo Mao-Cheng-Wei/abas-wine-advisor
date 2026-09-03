@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 
 import streamlit as st
@@ -85,7 +86,6 @@ st.markdown(
         margin-bottom:18px;
     }
     .brand-line {height:1px;background:#E8DFCF;margin:18px 0 22px;}
-    .contact-small {font-size:15px;color:#666;line-height:1.8;}
     @media (max-width:640px) {
       .block-container {
         padding-top:3.6rem !important;
@@ -275,9 +275,10 @@ def call_gemini_with_fallback(client, messages):
             response = client.chat.completions.create(
                 model=model_slug,
                 messages=messages,
-                temperature=0.12,
-                max_tokens=650,
+                temperature=0.1,
+                max_tokens=900,
                 timeout=120,
+                response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
             if not content or not str(content).strip() or str(content).strip().lower() == "none":
@@ -286,6 +287,101 @@ def call_gemini_with_fallback(client, messages):
         except Exception as e:
             errors.append(f"{model_label}: {e}")
     raise RuntimeError("Gemini 雲端模型目前無法完成分析。" + " | ".join(errors))
+
+
+def parse_advisor_json(text):
+    raw = str(text).strip()
+    if raw.startswith("```json"):
+        raw = raw[7:]
+    if raw.startswith("```"):
+        raw = raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    return json.loads(raw.strip())
+
+
+def validate_advisor_payload(payload, top3):
+    required = ["personality", "recommendations"]
+    if not all(k in payload for k in required):
+        return False
+    recs = payload.get("recommendations")
+    if not isinstance(recs, list) or len(recs) != len(top3):
+        return False
+    if not str(payload.get("personality", "")).strip():
+        return False
+    for idx, product in enumerate(top3):
+        item = recs[idx]
+        if str(item.get("name", "")).strip() != str(product["name"]).strip():
+            return False
+        if not str(item.get("reason", "")).strip():
+            return False
+    return True
+
+
+def build_advisor_messages(rag_context, user_scores, top3, retry_note=""):
+    rec = []
+    for idx, p in enumerate(top3, 1):
+        rec.append({
+            "rank": idx,
+            "name": p["name"],
+            "alcohol_level": p["alcohol_level"],
+            "matched_tags": p["matched_tags"],
+        })
+
+    schema_example = {
+        "personality": "80～120字的人格輪廓",
+        "recommendations": [
+            {"name": p["name"], "reason": "2～3句完整推薦理由"}
+            for p in top3
+        ],
+    }
+
+    prompt = f"""你是「安貝斯風味人格選酒顧問」。推薦酒款與順序已由 Python 決定，你只負責解讀，不得更動。
+
+【安貝斯知識】
+{rag_context}
+
+【使用者風味標籤】
+{json.dumps(user_scores, ensure_ascii=False)}
+
+【固定推薦結果】
+{json.dumps(rec, ensure_ascii=False)}
+
+請輸出一個 JSON 物件，且只能輸出 JSON，不要加 Markdown、前言或解釋。格式必須完全符合：
+{json.dumps(schema_example, ensure_ascii=False)}
+
+內容要求：
+1. personality：80～120字、2～3句。像一位懂人也懂酒的品牌顧問，溫暖、自然、有畫面，但不能浮誇。
+2. recommendations 的筆數、順序與 name 必須和固定推薦結果完全一致。
+3. 每款 reason 寫 2～3句，清楚說明它與使用者風味標籤、命中標籤或安貝斯知識的關係。
+4. 不能新增年份、日期、原料、產地、獎項、庫存、價格等沒有明確提供的資訊。
+5. 資料不足的項目直接略過，不要寫「未提供」「待確認」「請向安貝斯確認」「以官網為準」。
+6. 不要提 RAG、資料庫、模型、規則引擎、分數或技術流程。
+7. 不要重複同一句話，不要把三款酒寫成相同理由。
+8. 使用繁體中文。
+{retry_note}
+"""
+    return [
+        {"role": "system", "content": "你是安貝斯品牌的繁體中文選酒顧問。只根據提供資料回答，不可臆測。"},
+        {"role": "user", "content": prompt},
+    ]
+
+
+def generate_advisor_result(client, rag_context, user_scores, top3):
+    last_error = None
+    used_model = ""
+    for attempt in range(2):
+        retry_note = "" if attempt == 0 else "\n上一次輸出不完整。這次務必補齊 personality 與每一款推薦酒，且名稱與順序完全一致。"
+        messages = build_advisor_messages(rag_context, user_scores, top3, retry_note)
+        try:
+            resp, used_model = call_gemini_with_fallback(client, messages)
+            payload = parse_advisor_json(resp.choices[0].message.content)
+            if validate_advisor_payload(payload, top3):
+                return payload, used_model
+            last_error = RuntimeError("AI 回覆欄位不完整")
+        except Exception as e:
+            last_error = e
+    raise RuntimeError(f"AI 解讀格式驗證失敗：{last_error}")
 
 
 if "step" not in st.session_state:
@@ -401,57 +497,25 @@ else:
             nodes = retriever.retrieve(rq)
             rag_context = "\n\n".join(n.get_content() for n in nodes)
 
-            rec = ""
-            for i, p in enumerate(top3, 1):
-                rec += f"\n第{i}名｜{p['name']}｜酒精感{p['alcohol_level']}｜命中標籤：{'、'.join(p['matched_tags'])}"
-
-            prompt = f"""你是「安貝斯風味人格選酒顧問」。推薦排名已由 Python 規則引擎決定，不得修改。
-
-【RAG 知識】
-{rag_context}
-
-【使用者風味標籤】
-{user_scores}
-
-【推薦結果】
-{rec}
-
-請只依據以上資料，以自然、有品味的繁體中文回答。不要提到 RAG、資料庫或規則引擎。
-不得新增、刪除或改變推薦酒款與排名；不得自行補充年份、日期、原料、產地、獎項、庫存、價格或任何未提供資訊。
-如果資料沒有某項資訊，直接略過，不要說「未提供」「待確認」「請向安貝斯確認」等系統語句。
-不要重複同一句話或同一酒款，也不要輸出思考過程。
-
-固定輸出格式：
-【你的風味人格輪廓】
-80～120 字，2～3 句，寫出具畫面的風味人格描述。
-
-【最像你的酒】
-第一行直接寫產品名稱，接著 2～3 句說明最重要的命中原因。
-
-【另一種可能】
-若有第2名才輸出；第一行直接寫產品名稱，接著 2～3 句。
-
-【想挑戰的酒】
-只有第3名存在才輸出；第一行直接寫產品名稱，接著 2～3 句。
-"""
-
             client = get_gemini_client()
-            messages = [
-                {"role": "system", "content": "你是安貝斯品牌的繁體中文選酒顧問。只根據提供資料回答，不可臆測。"},
-                {"role": "user", "content": prompt},
-            ]
-
             with st.spinner("正在整理你的專屬風味解讀..."):
-                resp, used_model = call_gemini_with_fallback(client, messages)
-            ai_text = resp.choices[0].message.content
+                advisor, used_model = generate_advisor_result(client, rag_context, user_scores, top3)
 
             st.markdown('<div class="ai-main-title">安貝斯 AI 顧問解讀</div>', unsafe_allow_html=True)
             st.markdown(
                 '<div class="ai-subtitle">從你的風味偏好出發，看看哪一款最貼近現在的你</div>',
                 unsafe_allow_html=True,
             )
+
             with st.container(border=True):
-                st.markdown(ai_text)
+                st.markdown("### 你的風味人格輪廓")
+                st.write(advisor["personality"])
+
+                for idx, item in enumerate(advisor["recommendations"]):
+                    st.markdown(f"### {labels[idx]}")
+                    st.markdown(f"**{item['name']}**")
+                    st.write(item["reason"])
+
             with st.expander("技術資訊"):
                 st.caption(f"本次雲端模型：{used_model}")
 
@@ -459,27 +523,6 @@ else:
             st.info("AI 顧問暫時忙碌中；上方推薦結果仍可正常使用。")
             with st.expander("技術資訊"):
                 st.caption(str(e))
-
-    st.markdown('<div class="section-title">分享我的風味結果</div>', unsafe_allow_html=True)
-    share_lines = [
-        "我剛完成安貝斯風味人格選酒測驗 🍷",
-        "我的風味關鍵字：" + "、".join(tag for tag, _ in top_tags[:5]),
-    ]
-    if top3:
-        share_lines.append("最像我的酒：" + top3[0]["name"])
-        if len(top3) > 1:
-            share_lines.append("另一種可能：" + top3[1]["name"])
-    share_lines.append("也來測測看：" + APP_URL)
-    share_text = "\n".join(share_lines)
-    st.caption("點右上角複製圖示，即可貼到 LINE、Facebook 或訊息中。")
-    st.code(share_text, language=None)
-    st.download_button(
-        "下載我的風味結果",
-        data=share_text,
-        file_name="ABAS_風味人格結果.txt",
-        mime="text/plain",
-        use_container_width=True,
-    )
 
     st.markdown('<div class="section-title">想進一步了解這款酒？</div>', unsafe_allow_html=True)
     with st.container(border=True):
@@ -510,6 +553,27 @@ else:
             st.link_button("撥打 04-26886059", "tel:0426886059", use_container_width=True)
         with c4:
             st.link_button("Email 安貝斯", "mailto:daanabas1989@gmail.com", use_container_width=True)
+
+    st.markdown('<div class="section-title">分享我的風味結果</div>', unsafe_allow_html=True)
+    share_lines = [
+        "我剛完成安貝斯風味人格選酒測驗 🍷",
+        "我的風味關鍵字：" + "、".join(tag for tag, _ in top_tags[:5]),
+    ]
+    if top3:
+        share_lines.append("最像我的酒：" + top3[0]["name"])
+        if len(top3) > 1:
+            share_lines.append("另一種可能：" + top3[1]["name"])
+    share_lines.append("也來測測看：" + APP_URL)
+    share_text = "\n".join(share_lines)
+    st.caption("點右上角複製圖示，即可貼到 LINE、Facebook 或訊息中。")
+    st.code(share_text, language=None)
+    st.download_button(
+        "下載我的風味結果",
+        data=share_text,
+        file_name="ABAS_風味人格結果.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
 
     st.caption("未滿 18 歲請勿飲酒｜飲酒勿駕車｜本測驗為風味探索與產品認識用途")
 
