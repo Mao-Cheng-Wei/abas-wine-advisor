@@ -1,6 +1,7 @@
 streamlit>=1.62,<2
 openpyxl>=3.1
 openai>=1.0
+pydantic>=2.0
 llama-index-core>=0.13,<0.15
 llama-index-embeddings-fastembed>=0.3
 fastembed>=0.7
