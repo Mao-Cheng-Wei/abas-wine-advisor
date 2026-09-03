@@ -87,11 +87,13 @@ def get_official_product_image(product_url):
         patterns = [
             r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
             r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+            r'https://static\.wixstatic\.com/media/[^"\'<> ]+',
         ]
         for pattern in patterns:
             m = re.search(pattern, page, flags=re.I)
             if m:
-                return html.unescape(m.group(1))
+                value = m.group(1) if m.lastindex else m.group(0)
+                return html.unescape(value).replace('\\u002F', '/')
     except Exception:
         return None
     return None
@@ -298,7 +300,7 @@ else:
         with st.container(border=True):
             img_col,info_col=st.columns([1.1,2.3],vertical_alignment="center")
             with img_col:
-                image_path=find_product_image(p["id"])
+                image_path=find_product_image(p["id"], p.get("url"))
                 if image_path: st.image(image_path,use_container_width=True)
                 else: st.image("images/ABAS_logo.jpg",width=105); st.caption("官方商品圖載入中／待補")
             with info_col:
