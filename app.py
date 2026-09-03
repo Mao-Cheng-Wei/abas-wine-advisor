@@ -1,5 +1,8 @@
 import os
 import json
+import re
+import html
+import requests
 from pathlib import Path
 
 import streamlit as st
@@ -18,7 +21,7 @@ GEMINI_MODELS = [
 
 APP_URL = "https://abas-wine-advisor-2ju5inrreherxujphsnu7y.streamlit.app"
 CONTACT_PAGE = "https://dagc.com.tw/contact"
-DEFAULT_LINE_URL = "https://line.me/R/ti/p/@abas"
+DEFAULT_LINE_URL = "https://lin.ee/Hw3jvZI"
 PRODUCT_IMAGE_DIR = Path("images/products")
 
 
@@ -69,14 +72,38 @@ def get_secret(name, default=None):
         return os.getenv(name, default)
 
 
-def find_product_image(product_id):
-    if not PRODUCT_IMAGE_DIR.exists():
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_official_product_image(product_url):
+    if not product_url or "dagc.com.tw" not in str(product_url):
         return None
-    for ext in ("jpg", "jpeg", "png", "webp"):
-        p = PRODUCT_IMAGE_DIR / f"{product_id}.{ext}"
-        if p.exists():
-            return str(p)
+    try:
+        r = requests.get(
+            str(product_url),
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0 ABAS-Wine-Advisor/1.0"},
+        )
+        r.raise_for_status()
+        page = r.text
+        patterns = [
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, page, flags=re.I)
+            if m:
+                return html.unescape(m.group(1))
+    except Exception:
+        return None
     return None
+
+
+def find_product_image(product_id, product_url=None):
+    if PRODUCT_IMAGE_DIR.exists():
+        for ext in ("jpg", "jpeg", "png", "webp"):
+            p = PRODUCT_IMAGE_DIR / f"{product_id}.{ext}"
+            if p.exists():
+                return str(p)
+    return get_official_product_image(product_url)
 
 
 hero_left, hero_right = st.columns([1, 5], vertical_alignment="center")
@@ -88,6 +115,7 @@ with hero_right:
     st.markdown('<div class="hero-sub">先不談酒名，從生活、香氣與口感直覺出發，找出更貼近你的風味方向。</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="brand-line"></div>', unsafe_allow_html=True)
+st.caption("台中大安風土｜純糧固態發酵蒸餾｜30年釀酒傳承")
 
 questions = [
     {"id":"Q01","title":"社交能量","question":"今晚最想把時間留給哪一種狀態？","options":{"A":{"text":"一個人安靜整理思緒","tags":["安靜","內省","慢飲"]},"B":{"text":"和一位熟悉的人好好聊天","tags":["親密","柔和","分享"]},"C":{"text":"三五好友輕鬆聚會","tags":["活潑","分享","易飲"]},"D":{"text":"把氣氛推到最高點","tags":["強烈","慶祝","高能量"]}}},
@@ -272,7 +300,7 @@ else:
             with img_col:
                 image_path=find_product_image(p["id"])
                 if image_path: st.image(image_path,use_container_width=True)
-                else: st.image("images/ABAS_logo.jpg",width=105); st.caption("商品圖片待補")
+                else: st.image("images/ABAS_logo.jpg",width=105); st.caption("官方商品圖載入中／待補")
             with info_col:
                 st.caption(labels[i]); st.subheader(p["name"])
                 if p["matched_tags"]: st.write("風味契合："+"、".join(p["matched_tags"]))
