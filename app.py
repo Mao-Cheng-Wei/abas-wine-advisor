@@ -1,7 +1,9 @@
 import os
 import base64
-import tiktoken
+from pathlib import Path
+
 import streamlit as st
+import tiktoken
 from openpyxl import load_workbook
 from openai import OpenAI
 
@@ -14,6 +16,9 @@ GEMINI_MODELS = [
     ("gemini-3.6-flash", "Gemini 3.6 Flash"),
 ]
 
+APP_URL = "https://abas-wine-advisor-2ju5inrreherxujphsnu7y.streamlit.app"
+PRODUCT_IMAGE_DIR = Path("images/products")
+
 st.set_page_config(
     page_title="安貝斯風味人格選酒顧問",
     page_icon="🍷",
@@ -23,32 +28,59 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .block-container {padding-top: 2.4rem; padding-bottom: 2rem;}
-    .ai-main-title {text-align:center;font-size:40px;font-weight:800;color:#2F3140;margin-top:18px;margin-bottom:10px;}
-    .ai-subtitle {text-align:center;font-size:16px;color:#7A7A7A;margin-bottom:10px;}
-    .ai-divider {height:2px;background:linear-gradient(to right,transparent,#D8C2A1,transparent);margin:10px 0 24px;border-radius:999px;}
+    .block-container {padding-top: 2.2rem; padding-bottom: 3rem; max-width: 980px;}
+    .hero-kicker {font-size:14px; letter-spacing:.12em; color:#A9782A; font-weight:800; margin-bottom:6px;}
+    .hero-title {font-size:38px; font-weight:800; line-height:1.15; color:#2F3140; margin:0 0 8px;}
+    .hero-sub {font-size:18px; color:#666; line-height:1.75; margin-bottom:12px;}
+    .section-title {font-size:30px; font-weight:800; color:#2F3140; margin:24px 0 12px;}
+    .chip {display:inline-block; background:#F7F0E4; color:#7A5520; padding:7px 14px; border-radius:999px; margin:4px; font-size:16px; border:1px solid #E8D6B8;}
+    .mini-note {font-size:14px; color:#888; line-height:1.6;}
+    .ai-main-title {text-align:center; font-size:38px; font-weight:800; color:#2F3140; margin-top:24px; margin-bottom:6px;}
+    .ai-subtitle {text-align:center; font-size:16px; color:#7A7A7A; margin-bottom:18px;}
+    .brand-line {height:1px; background:#E8DFCF; margin:16px 0 20px;}
+    @media (max-width:640px) {
+      .block-container {padding-top:1.2rem; padding-left:1rem; padding-right:1rem;}
+      .hero-title {font-size:29px;}
+      .hero-sub {font-size:16px;}
+      .section-title {font-size:25px;}
+      .ai-main-title {font-size:31px;}
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+
+def get_secret(name, default=None):
+    try:
+        value = st.secrets[name]
+        return value if value else default
+    except Exception:
+        return os.getenv(name, default)
+
+
+def find_product_image(product_id):
+    if not PRODUCT_IMAGE_DIR.exists():
+        return None
+    for ext in ("jpg", "jpeg", "png", "webp"):
+        p = PRODUCT_IMAGE_DIR / f"{product_id}.{ext}"
+        if p.exists():
+            return str(p)
+    return None
+
+
 with open("images/ABAS_logo.jpg", "rb") as f:
     logo_base64 = base64.b64encode(f.read()).decode()
 
-st.markdown(
-    f"""
-    <div style="display:flex;align-items:center;gap:14px;margin-bottom:6px;">
-      <img src="data:image/jpeg;base64,{logo_base64}" style="width:82px;height:auto;display:block;">
-      <div style="font-size:34px;font-weight:700;line-height:1.15;color:#2F3140;">安貝斯風味人格選酒顧問</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+hero_left, hero_right = st.columns([1, 5], vertical_alignment="center")
+with hero_left:
+    st.image("images/ABAS_logo.jpg", width=86)
+with hero_right:
+    st.markdown('<div class="hero-kicker">ABAS FLAVOR PERSONALITY</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-title">安貝斯風味人格選酒顧問</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-sub">先不談酒名，從生活、香氣與口感直覺出發，找出更貼近你的風味方向。</div>', unsafe_allow_html=True)
 
-st.markdown(
-    '<div style="font-size:18px;margin:2px 0 12px;">先不談酒名。用幾個生活與感官問題，找出最接近你的風味個性。</div>',
-    unsafe_allow_html=True,
-)
+st.markdown('<div class="brand-line"></div>', unsafe_allow_html=True)
 
 questions = [
     {"id":"Q01","title":"社交能量","question":"今晚最想把時間留給哪一種狀態？","options":{
@@ -175,12 +207,9 @@ def build_rag_index():
 
 
 def get_gemini_client():
-    try:
-        key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        key = os.getenv("GEMINI_API_KEY")
+    key = get_secret("GEMINI_API_KEY")
     if not key:
-        raise RuntimeError("尚未設定 GEMINI_API_KEY。請到 Google AI Studio 建立 API Key，並放入 Streamlit Secrets。")
+        raise RuntimeError("尚未設定 GEMINI_API_KEY。")
     return OpenAI(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key=key,
@@ -194,7 +223,7 @@ def call_gemini_with_fallback(client, messages):
             response = client.chat.completions.create(
                 model=model_slug,
                 messages=messages,
-                temperature=0.1,
+                temperature=0.12,
                 max_tokens=650,
                 timeout=120,
             )
@@ -216,30 +245,30 @@ if "finished" not in st.session_state:
 
 
 if not st.session_state.finished:
-    step = st.session_state.step
-    q = questions[step]
-    st.progress((step + 1) / len(questions))
-    st.caption(f"第 {step + 1} / {len(questions)} 題")
+    st.progress((st.session_state.step + 1) / len(questions))
+    st.caption(f"第 {st.session_state.step + 1} / {len(questions)} 題")
+    q = questions[st.session_state.step]
     st.subheader(f"{q['id']}｜{q['title']}")
     st.write(q["question"])
     answer = st.radio(
         "請選擇：",
         list(q["options"].keys()),
         format_func=lambda x: f"{x}. {q['options'][x]['text']}",
-        key=f"q_{step}",
+        key=f"q_{st.session_state.step}",
     )
 
-    if st.button("下一題", use_container_width=True):
+    if st.button("下一題", use_container_width=True, type="primary"):
         for tag in q["options"][answer]["tags"]:
             st.session_state.scores[tag] = st.session_state.scores.get(tag, 0) + 3
-        if step + 1 >= len(questions):
+        if st.session_state.step + 1 >= len(questions):
             st.session_state.finished = True
         else:
             st.session_state.step += 1
         st.rerun()
 
+    st.markdown('<div class="mini-note">本測驗提供風味探索與產品認識，不代表飲酒必要性。未滿 18 歲請勿飲酒，飲酒勿駕車。</div>', unsafe_allow_html=True)
+
 else:
-    st.success("測驗完成")
     user_scores = st.session_state.scores
 
     if "低酒精" in user_scores or "中低酒感" in user_scores:
@@ -274,39 +303,39 @@ else:
 
     results.sort(key=lambda x: x["score"], reverse=True)
     top3 = results[:3]
-
-    st.markdown('<div style="font-size:30px;font-weight:700;margin-top:20px;">你的風味人格</div>', unsafe_allow_html=True)
     top_tags = sorted(user_scores.items(), key=lambda x: x[1], reverse=True)[:8]
-    chips = "".join(
-        f'<span style="display:inline-block;background:#F7F0E4;color:#7A5520;padding:7px 14px;border-radius:20px;margin:4px;font-size:16px;">{tag}</span>'
-        for tag, _ in top_tags
-    )
+
+    st.markdown('<div class="section-title">你的風味人格</div>', unsafe_allow_html=True)
+    chips = "".join(f'<span class="chip">{tag}</span>' for tag, _ in top_tags)
     st.markdown(chips, unsafe_allow_html=True)
 
-    st.markdown('<div style="font-size:30px;font-weight:700;margin-top:18px;margin-bottom:18px;">你的推薦酒款</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">為你挑出的酒款</div>', unsafe_allow_html=True)
     labels = ["最像你的酒", "另一種可能", "想挑戰的酒"]
 
     for i, p in enumerate(top3):
-        st.markdown(
-            f"""
-            <div style="border:1px solid #E8E2D8;border-radius:16px;padding:22px;margin-bottom:12px;background:#FFFDF9;">
-              <div style="font-size:16px;color:#A9782A;font-weight:700;">{labels[i]}</div>
-              <div style="font-size:25px;font-weight:700;margin:8px 0 14px;">{p['name']}</div>
-              <div style="font-size:16px;line-height:1.8;">
-                配對分數：{p['score']}<br>
-                酒精感：{p['alcohol_level']}<br>
-                酒精度：{p['alcohol'] if p['alcohol'] else '待確認'}<br>
-                價格：{'NT$' + str(p['price']) if p['price'] else '待確認'}<br>
-                命中標籤：{'、'.join(p['matched_tags']) if p['matched_tags'] else '目前無直接命中'}
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if p["url"]:
-            st.link_button("查看官方產品", p["url"], use_container_width=True)
-        st.divider()
+        with st.container(border=True):
+            img_col, info_col = st.columns([1.1, 2.3], vertical_alignment="center")
+            with img_col:
+                image_path = find_product_image(p["id"])
+                if image_path:
+                    st.image(image_path, use_container_width=True)
+                else:
+                    st.image("images/ABAS_logo.jpg", width=105)
+                    st.caption("商品圖片待補")
+            with info_col:
+                st.caption(labels[i])
+                st.subheader(p["name"])
+                if p["matched_tags"]:
+                    st.write("風味契合：" + "、".join(p["matched_tags"]))
+                if p["alcohol"]:
+                    st.write(f"酒精度：{p['alcohol']}")
+                if p["price"]:
+                    st.write(f"參考價格：NT${p['price']}")
+                if p["url"]:
+                    st.link_button("查看官方產品", p["url"], use_container_width=True)
 
+    ai_text = ""
+    used_model = ""
     if top3:
         try:
             index = build_rag_index()
@@ -314,14 +343,14 @@ else:
             rq = f"""
 使用者風味標籤：{user_scores}
 推薦酒款：{[p['name'] for p in top3]}
-請找相關安貝斯產品特色與推薦規則。
+請找與這些風味人格、產品特色與推薦規則最相關的安貝斯知識。
 """
             nodes = retriever.retrieve(rq)
             rag_context = "\n\n".join(n.get_content() for n in nodes)
 
             rec = ""
             for i, p in enumerate(top3, 1):
-                rec += f"\n第{i}名｜{p['name']}｜分數{p['score']}｜酒精感{p['alcohol_level']}｜命中標籤：{'、'.join(p['matched_tags'])}"
+                rec += f"\n第{i}名｜{p['name']}｜酒精感{p['alcohol_level']}｜命中標籤：{'、'.join(p['matched_tags'])}"
 
             prompt = f"""你是「安貝斯風味人格選酒顧問」。推薦排名已由 Python 規則引擎決定，不得修改。
 
@@ -334,29 +363,23 @@ else:
 【推薦結果】
 {rec}
 
-請只依據以上資料，以繁體中文回答。
-
-嚴格規則：
-1. 不得新增、刪除或改變推薦酒款與排名。
-2. 不得自行補充年份、日期、原料、產地、獎項、庫存或任何未提供資訊。
-3. 不得輸出任何與推薦無關的日期或數字；尤其不得產生日期格式。
-4. 不得重複同一句話、同一酒款或無意義條列。
-5. 若資料沒有支持某個說法，就不要寫。
-6. 推薦理由只能來自 RAG 知識、使用者標籤與命中標籤。
-7. 不要輸出思考過程，不要使用 Markdown 表格。
+請只依據以上資料，以自然、有品味的繁體中文回答。不要提到 RAG、資料庫或規則引擎。
+不得新增、刪除或改變推薦酒款與排名；不得自行補充年份、日期、原料、產地、獎項、庫存、價格或任何未提供資訊。
+如果資料沒有某項資訊，直接略過，不要說「未提供」「待確認」「請向安貝斯確認」等系統語句。
+不要重複同一句話或同一酒款，也不要輸出思考過程。
 
 固定輸出格式：
 【你的風味人格輪廓】
-80～120 字，2～3 句，只描述最具代表性的偏好。
+80～120 字，2～3 句，寫出具畫面的風味人格描述。
 
 【最像你的酒】
-第一行直接寫產品名稱，不要寫「第1名」，接著 2～3 句說明最重要的命中原因。
+第一行直接寫產品名稱，接著 2～3 句說明最重要的命中原因。
 
 【另一種可能】
 若有第2名才輸出；第一行直接寫產品名稱，接著 2～3 句。
 
 【想挑戰的酒】
-只有實際存在第3名時才輸出；第一行直接寫產品名稱，接著 2～3 句。
+只有第3名存在才輸出；第一行直接寫產品名稱，接著 2～3 句。
 """
 
             client = get_gemini_client()
@@ -365,22 +388,62 @@ else:
                 {"role": "user", "content": prompt},
             ]
 
-            with st.spinner("安貝斯 AI 顧問正在用 Gemini 雲端分析..."):
+            with st.spinner("正在整理你的專屬風味解讀..."):
                 resp, used_model = call_gemini_with_fallback(client, messages)
-
             ai_text = resp.choices[0].message.content
-            st.markdown(
-                '<div class="ai-main-title">安貝斯 AI 顧問解讀</div>'
-                '<div class="ai-subtitle">根據你的風味人格與安貝斯 RAG 知識庫，整理出推薦說明</div>'
-                '<div class="ai-divider"></div>',
-                unsafe_allow_html=True,
-            )
-            st.caption(f"本次雲端模型：{used_model}")
-            st.markdown(ai_text)
+
+            st.markdown('<div class="ai-main-title">安貝斯 AI 顧問解讀</div>', unsafe_allow_html=True)
+            st.markdown('<div class="ai-subtitle">從你的風味偏好出發，看看哪一款最貼近現在的你</div>', unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown(ai_text)
+            with st.expander("技術資訊"):
+                st.caption(f"本次雲端模型：{used_model}")
 
         except Exception as e:
-            st.warning("目前無法完成雲端 AI / RAG 分析。")
-            st.caption(f"錯誤資訊：{e}")
+            st.info("AI 顧問暫時忙碌中；上方推薦結果仍可正常使用。")
+            with st.expander("技術資訊"):
+                st.caption(str(e))
+
+    st.markdown('<div class="section-title">分享我的風味結果</div>', unsafe_allow_html=True)
+    share_lines = [
+        "我剛完成安貝斯風味人格選酒測驗 🍷",
+        "我的風味關鍵字：" + "、".join(tag for tag, _ in top_tags[:5]),
+    ]
+    if top3:
+        share_lines.append("最像我的酒：" + top3[0]["name"])
+        if len(top3) > 1:
+            share_lines.append("另一種可能：" + top3[1]["name"])
+    share_lines.append("也來測測看：" + APP_URL)
+    share_text = "\n".join(share_lines)
+    st.caption("點右上角複製圖示，即可貼到 LINE、Facebook 或訊息中。")
+    st.code(share_text, language=None)
+    st.download_button(
+        "下載我的風味結果",
+        data=share_text,
+        file_name="ABAS_風味人格結果.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
+
+    st.markdown('<div class="section-title">想進一步了解這款酒？</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.subheader("讓安貝斯接著陪你選")
+        st.write("如果你想依送禮、聚會、搭餐或個人口味再挑得更精準，可以直接與安貝斯聯絡。")
+        line_url = get_secret("LINE_CONTACT_URL")
+        contact_url = get_secret("CONTACT_URL")
+        c1, c2 = st.columns(2)
+        with c1:
+            if line_url:
+                st.link_button("LINE 諮詢", line_url, use_container_width=True)
+            else:
+                st.button("LINE 諮詢（待設定）", disabled=True, use_container_width=True)
+        with c2:
+            if contact_url:
+                st.link_button("聯絡安貝斯", contact_url, use_container_width=True)
+            elif top3 and top3[0]["url"]:
+                st.link_button("查看推薦酒款", top3[0]["url"], use_container_width=True)
+
+    st.caption("未滿 18 歲請勿飲酒｜飲酒勿駕車｜本測驗為風味探索與產品認識用途")
 
     if st.button("重新測驗", use_container_width=True):
         st.session_state.step = 0
