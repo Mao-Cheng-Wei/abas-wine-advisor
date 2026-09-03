@@ -1,12 +1,10 @@
 import os
-import base64
 from pathlib import Path
 
 import streamlit as st
 import tiktoken
 from openpyxl import load_workbook
 from openai import OpenAI
-
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
@@ -17,6 +15,8 @@ GEMINI_MODELS = [
 ]
 
 APP_URL = "https://abas-wine-advisor-2ju5inrreherxujphsnu7y.streamlit.app"
+CONTACT_PAGE = "https://dagc.com.tw/contact"
+DEFAULT_LINE_URL = "https://line.me/R/ti/p/@abas"
 PRODUCT_IMAGE_DIR = Path("images/products")
 
 st.set_page_config(
@@ -28,18 +28,70 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .block-container {padding-top: 2.2rem; padding-bottom: 3rem; max-width: 980px;}
-    .hero-kicker {font-size:14px; letter-spacing:.12em; color:#A9782A; font-weight:800; margin-bottom:6px;}
-    .hero-title {font-size:38px; font-weight:800; line-height:1.15; color:#2F3140; margin:0 0 8px;}
-    .hero-sub {font-size:18px; color:#666; line-height:1.75; margin-bottom:12px;}
-    .section-title {font-size:30px; font-weight:800; color:#2F3140; margin:24px 0 12px;}
-    .chip {display:inline-block; background:#F7F0E4; color:#7A5520; padding:7px 14px; border-radius:999px; margin:4px; font-size:16px; border:1px solid #E8D6B8;}
-    .mini-note {font-size:14px; color:#888; line-height:1.6;}
-    .ai-main-title {text-align:center; font-size:38px; font-weight:800; color:#2F3140; margin-top:24px; margin-bottom:6px;}
-    .ai-subtitle {text-align:center; font-size:16px; color:#7A7A7A; margin-bottom:18px;}
-    .brand-line {height:1px; background:#E8DFCF; margin:16px 0 20px;}
+    .block-container {
+        padding-top: 4.6rem !important;
+        padding-bottom: 3rem !important;
+        max-width: 980px;
+    }
+    .hero-kicker {
+        font-size:14px;
+        letter-spacing:.12em;
+        color:#A9782A;
+        font-weight:800;
+        margin-bottom:6px;
+    }
+    .hero-title {
+        font-size:38px;
+        font-weight:800;
+        line-height:1.15;
+        color:#2F3140;
+        margin:0 0 8px;
+    }
+    .hero-sub {
+        font-size:18px;
+        color:#666;
+        line-height:1.75;
+        margin-bottom:12px;
+    }
+    .section-title {
+        font-size:30px;
+        font-weight:800;
+        color:#2F3140;
+        margin:26px 0 12px;
+    }
+    .chip {
+        display:inline-block;
+        background:#F7F0E4;
+        color:#7A5520;
+        padding:7px 14px;
+        border-radius:999px;
+        margin:4px;
+        font-size:16px;
+        border:1px solid #E8D6B8;
+    }
+    .mini-note {font-size:14px;color:#888;line-height:1.6;}
+    .ai-main-title {
+        text-align:center;
+        font-size:38px;
+        font-weight:800;
+        color:#2F3140;
+        margin-top:28px;
+        margin-bottom:6px;
+    }
+    .ai-subtitle {
+        text-align:center;
+        font-size:16px;
+        color:#7A7A7A;
+        margin-bottom:18px;
+    }
+    .brand-line {height:1px;background:#E8DFCF;margin:18px 0 22px;}
+    .contact-small {font-size:15px;color:#666;line-height:1.8;}
     @media (max-width:640px) {
-      .block-container {padding-top:1.2rem; padding-left:1rem; padding-right:1rem;}
+      .block-container {
+        padding-top:3.6rem !important;
+        padding-left:1rem !important;
+        padding-right:1rem !important;
+      }
       .hero-title {font-size:29px;}
       .hero-sub {font-size:16px;}
       .section-title {font-size:25px;}
@@ -69,16 +121,16 @@ def find_product_image(product_id):
     return None
 
 
-with open("images/ABAS_logo.jpg", "rb") as f:
-    logo_base64 = base64.b64encode(f.read()).decode()
-
 hero_left, hero_right = st.columns([1, 5], vertical_alignment="center")
 with hero_left:
     st.image("images/ABAS_logo.jpg", width=86)
 with hero_right:
     st.markdown('<div class="hero-kicker">ABAS FLAVOR PERSONALITY</div>', unsafe_allow_html=True)
     st.markdown('<div class="hero-title">安貝斯風味人格選酒顧問</div>', unsafe_allow_html=True)
-    st.markdown('<div class="hero-sub">先不談酒名，從生活、香氣與口感直覺出發，找出更貼近你的風味方向。</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="hero-sub">先不談酒名，從生活、香氣與口感直覺出發，找出更貼近你的風味方向。</div>',
+        unsafe_allow_html=True,
+    )
 
 st.markdown('<div class="brand-line"></div>', unsafe_allow_html=True)
 
@@ -266,7 +318,10 @@ if not st.session_state.finished:
             st.session_state.step += 1
         st.rerun()
 
-    st.markdown('<div class="mini-note">本測驗提供風味探索與產品認識，不代表飲酒必要性。未滿 18 歲請勿飲酒，飲酒勿駕車。</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="mini-note">本測驗提供風味探索與產品認識，不代表飲酒必要性。未滿 18 歲請勿飲酒，飲酒勿駕車。</div>',
+        unsafe_allow_html=True,
+    )
 
 else:
     user_scores = st.session_state.scores
@@ -334,8 +389,6 @@ else:
                 if p["url"]:
                     st.link_button("查看官方產品", p["url"], use_container_width=True)
 
-    ai_text = ""
-    used_model = ""
     if top3:
         try:
             index = build_rag_index()
@@ -393,7 +446,10 @@ else:
             ai_text = resp.choices[0].message.content
 
             st.markdown('<div class="ai-main-title">安貝斯 AI 顧問解讀</div>', unsafe_allow_html=True)
-            st.markdown('<div class="ai-subtitle">從你的風味偏好出發，看看哪一款最貼近現在的你</div>', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="ai-subtitle">從你的風味偏好出發，看看哪一款最貼近現在的你</div>',
+                unsafe_allow_html=True,
+            )
             with st.container(border=True):
                 st.markdown(ai_text)
             with st.expander("技術資訊"):
@@ -429,19 +485,31 @@ else:
     with st.container(border=True):
         st.subheader("讓安貝斯接著陪你選")
         st.write("如果你想依送禮、聚會、搭餐或個人口味再挑得更精準，可以直接與安貝斯聯絡。")
-        line_url = get_secret("LINE_CONTACT_URL")
-        contact_url = get_secret("CONTACT_URL")
+
+        st.markdown(
+            """
+            **安貝斯聯絡資訊**  
+            台中市大安區頂安里中山北路330號  
+            聯絡電話：04-26886059 / 04-2688-8318  
+            E-mail：daanabas1989@gmail.com  
+            官方 LINE：@abas  
+            服務時間：週一～週五 9:00–18:00
+            """
+        )
+
+        line_url = get_secret("LINE_CONTACT_URL", DEFAULT_LINE_URL)
+        contact_url = get_secret("CONTACT_URL", CONTACT_PAGE)
         c1, c2 = st.columns(2)
         with c1:
-            if line_url:
-                st.link_button("LINE 諮詢", line_url, use_container_width=True)
-            else:
-                st.button("LINE 諮詢（待設定）", disabled=True, use_container_width=True)
+            st.link_button("官方 LINE｜@abas", line_url, use_container_width=True)
         with c2:
-            if contact_url:
-                st.link_button("聯絡安貝斯", contact_url, use_container_width=True)
-            elif top3 and top3[0]["url"]:
-                st.link_button("查看推薦酒款", top3[0]["url"], use_container_width=True)
+            st.link_button("聯絡安貝斯", contact_url, use_container_width=True)
+
+        c3, c4 = st.columns(2)
+        with c3:
+            st.link_button("撥打 04-26886059", "tel:0426886059", use_container_width=True)
+        with c4:
+            st.link_button("Email 安貝斯", "mailto:daanabas1989@gmail.com", use_container_width=True)
 
     st.caption("未滿 18 歲請勿飲酒｜飲酒勿駕車｜本測驗為風味探索與產品認識用途")
 
