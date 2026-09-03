@@ -9,10 +9,9 @@ from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 
-OPENROUTER_MODELS = [
-    ("thinkingmachines/inkling-small:free", "Inkling Small (free)"),
-    ("minimax/minimax-m2.7:free", "MiniMax M2.7 (free)"),
-    ("liquid/lfm-2.5-2.6b:free", "LFM2.5-2.6B (free)"),
+GEMINI_MODELS = [
+    ("gemini-3.7-flash", "Gemini 3.7 Flash"),
+    ("gemini-3.6-flash", "Gemini 3.6 Flash"),
 ]
 
 st.set_page_config(
@@ -175,26 +174,22 @@ def build_rag_index():
     return VectorStoreIndex.from_documents(docs)
 
 
-def get_openrouter_client():
+def get_gemini_client():
     try:
-        key = st.secrets["OPENROUTER_API_KEY"]
+        key = st.secrets["GEMINI_API_KEY"]
     except Exception:
-        key = os.getenv("OPENROUTER_API_KEY")
+        key = os.getenv("GEMINI_API_KEY")
     if not key:
-        raise RuntimeError("尚未設定 OPENROUTER_API_KEY。")
+        raise RuntimeError("尚未設定 GEMINI_API_KEY。請到 Google AI Studio 建立 API Key，並放入 Streamlit Secrets。")
     return OpenAI(
-        base_url="https://openrouter.ai/api/v1",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key=key,
-        default_headers={
-            "HTTP-Referer": "https://streamlit.app",
-            "X-Title": "ABAS Wine Personality Advisor",
-        },
     )
 
 
-def call_openrouter_with_fallback(client, messages):
+def call_gemini_with_fallback(client, messages):
     errors = []
-    for model_slug, model_label in OPENROUTER_MODELS:
+    for model_slug, model_label in GEMINI_MODELS:
         try:
             response = client.chat.completions.create(
                 model=model_slug,
@@ -203,10 +198,13 @@ def call_openrouter_with_fallback(client, messages):
                 max_tokens=650,
                 timeout=120,
             )
+            content = response.choices[0].message.content
+            if not content or not str(content).strip() or str(content).strip().lower() == "none":
+                raise RuntimeError("模型沒有回傳有效文字")
             return response, model_label
         except Exception as e:
             errors.append(f"{model_label}: {e}")
-    raise RuntimeError("所有免費雲端模型目前皆無法使用。" + " | ".join(errors))
+    raise RuntimeError("Gemini 雲端模型目前無法完成分析。" + " | ".join(errors))
 
 
 if "step" not in st.session_state:
@@ -341,7 +339,7 @@ else:
 嚴格規則：
 1. 不得新增、刪除或改變推薦酒款與排名。
 2. 不得自行補充年份、日期、原料、產地、獎項、庫存或任何未提供資訊。
-3. 不得輸出任何與推薦無關的日期或數字；尤其不得產生日期格式（例如 2019-01-01）。
+3. 不得輸出任何與推薦無關的日期或數字；尤其不得產生日期格式。
 4. 不得重複同一句話、同一酒款或無意義條列。
 5. 若資料沒有支持某個說法，就不要寫。
 6. 推薦理由只能來自 RAG 知識、使用者標籤與命中標籤。
@@ -361,14 +359,14 @@ else:
 只有實際存在第3名時才輸出；第一行直接寫產品名稱，接著 2～3 句。
 """
 
-            client = get_openrouter_client()
+            client = get_gemini_client()
             messages = [
                 {"role": "system", "content": "你是安貝斯品牌的繁體中文選酒顧問。只根據提供資料回答，不可臆測。"},
                 {"role": "user", "content": prompt},
             ]
 
-            with st.spinner("安貝斯 AI 顧問正在雲端分析..."):
-                resp, used_model = call_openrouter_with_fallback(client, messages)
+            with st.spinner("安貝斯 AI 顧問正在用 Gemini 雲端分析..."):
+                resp, used_model = call_gemini_with_fallback(client, messages)
 
             ai_text = resp.choices[0].message.content
             st.markdown(
