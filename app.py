@@ -9,10 +9,12 @@ from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, Settings
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 
 
+OPENROUTER_MODEL = "qwen/qwen3-8b:free"
+
 st.set_page_config(
     page_title="安貝斯風味人格選酒顧問",
     page_icon="🍷",
-    layout="centered"
+    layout="centered",
 )
 
 st.markdown(
@@ -302,29 +304,53 @@ else:
             for i, p in enumerate(top3, 1):
                 rec += f"\n第{i}名｜{p['name']}｜分數{p['score']}｜酒精感{p['alcohol_level']}｜命中標籤：{'、'.join(p['matched_tags'])}"
 
-            prompt = f"""你是安貝斯風味人格選酒顧問。排名已由 Python 決定，不得修改。
-【RAG知識】
+            prompt = f"""/no_think
+你是「安貝斯風味人格選酒顧問」。推薦排名已由 Python 規則引擎決定，不得修改。
+
+【RAG 知識】
 {rag_context}
 
-【使用者標籤】
+【使用者風味標籤】
 {user_scores}
 
 【推薦結果】
 {rec}
 
-請以繁體中文輸出：
-【你的風味人格輪廓】80～120字，2～3句。
-【最像你的酒】直接寫產品名，2～3句。
-【另一種可能】若有第2名才輸出，2～3句。
-【想挑戰的酒】只有第3名存在才輸出，2～3句。
-不得新增酒款、年份、原料或未提供資訊；推薦理由只可使用RAG知識、命中標籤與使用者標籤。"""
+請只依據以上資料，以繁體中文回答。
+
+嚴格規則：
+1. 不得新增、刪除或改變推薦酒款與排名。
+2. 不得自行補充年份、日期、原料、產地、獎項、庫存或任何未提供資訊。
+3. 不得輸出任何與推薦無關的日期或數字；尤其不得產生日期格式（例如 2019-01-01）。
+4. 不得重複同一句話、同一酒款或無意義條列。
+5. 若資料沒有支持某個說法，就不要寫。
+6. 推薦理由只能來自 RAG 知識、使用者標籤與命中標籤。
+7. 不要輸出思考過程，不要使用 Markdown 表格。
+
+固定輸出格式：
+【你的風味人格輪廓】
+80～120 字，2～3 句，只描述最具代表性的偏好。
+
+【最像你的酒】
+第一行直接寫產品名稱，不要寫「第1名」，接著 2～3 句說明最重要的命中原因。
+
+【另一種可能】
+若有第2名才輸出；第一行直接寫產品名稱，接著 2～3 句。
+
+【想挑戰的酒】
+只有實際存在第3名時才輸出；第一行直接寫產品名稱，接著 2～3 句。
+"""
 
             client = get_openrouter_client()
             with st.spinner("安貝斯 AI 顧問正在雲端分析..."):
                 resp = client.chat.completions.create(
-                    model="openrouter/free",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2,
+                    model=OPENROUTER_MODEL,
+                    messages=[
+                        {"role": "system", "content": "你是安貝斯品牌的繁體中文選酒顧問。只根據提供資料回答，不可臆測。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.1,
+                    max_tokens=650,
                     timeout=120,
                 )
 
